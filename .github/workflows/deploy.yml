@@ -1,9 +1,14 @@
-name: Deploy to Databricks
+﻿name: Deploy to Databricks
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit SHA, tag or ref on main to deploy (e.g. a1b2c3d, HEAD~1). Leave empty for latest main."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -23,11 +28,65 @@ jobs:
       DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
       APP_NAME: gradio-hello-world
     steps:
+      - name: Check out main history
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve commit to deploy
+        id: target
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          ref="${REQUESTED_REF:-$GITHUB_SHA}"
+          if ! sha=$(git rev-parse --verify --quiet "${ref}^{commit}"); then
+            echo "::error::'$ref' is not a valid commit in this repository."
+            exit 1
+          fi
+          # Only reviewed code (already on main) may be deployed.
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::Commit $sha is not on main."
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Deploying $sha: $(git log -1 --format=%s "$sha")"
+
       - name: Set up Databricks CLI
         uses: databricks/setup-cli@main
 
-      - name: Deploy commit ${{ github.sha }}
-        run: databricks apps deploy "$APP_NAME" --git-commit "$GITHUB_SHA" --timeout 20m
+      - name: Record currently running version
+        id: previous
+        run: |
+          dep=$(databricks apps get "$APP_NAME" -o json | jq -c '.active_deployment // {}')
+          commit=$(jq -r '.git_source.resolved_commit // .git_source.commit // empty' <<<"$dep")
+          path=$(jq -r 'if .git_source then empty else (.source_code_path // empty) end' <<<"$dep")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+          echo "Currently running: ${commit:-${path:-nothing}}"
+
+      - name: Deploy ${{ steps.target.outputs.sha }}
+        id: deploy
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: databricks apps deploy "$APP_NAME" --git-commit "$TARGET_SHA" --timeout 20m
+
+      - name: Roll back to previous version
+        if: failure() && steps.deploy.outcome == 'failure'
+        env:
+          PREV_COMMIT: ${{ steps.previous.outputs.commit }}
+          PREV_PATH: ${{ steps.previous.outputs.path }}
+        run: |
+          if [ -n "$PREV_COMMIT" ]; then
+            echo "::warning::Deployment failed. Rolling back to commit $PREV_COMMIT."
+            databricks apps deploy "$APP_NAME" --git-commit "$PREV_COMMIT" --timeout 20m
+          elif [ -n "$PREV_PATH" ]; then
+            echo "::warning::Deployment failed. Rolling back to workspace snapshot $PREV_PATH."
+            databricks apps deploy "$APP_NAME" --source-code-path "$PREV_PATH" --timeout 20m
+          else
+            echo "::error::Deployment failed and there is no previous version to roll back to."
+            exit 1
+          fi
 
       - name: Show app status
         if: always()
