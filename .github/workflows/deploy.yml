@@ -16,7 +16,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production
+    environment: development
     env:
       DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
       DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
