@@ -1,0 +1,34 @@
+name: Deploy to Databricks
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two deployments of the app at once; queued runs wait their turn.
+concurrency:
+  group: databricks-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+      DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+      APP_NAME: gradio-hello-world
+    steps:
+      - name: Set up Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Deploy commit ${{ github.sha }}
+        run: databricks apps deploy "$APP_NAME" --git-commit "$GITHUB_SHA" --timeout 20m
+
+      - name: Show app status
+        if: always()
+        run: databricks apps get "$APP_NAME" -o json | jq '{app_status, active_deployment}'
