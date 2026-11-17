@@ -106,6 +106,17 @@ def load_upload(file_path):
     )
 
 
+def summarize(df):
+    if df is None:
+        return None
+    numeric = df.select_dtypes(include='number')
+    if numeric.empty:
+        return pd.DataFrame({'info': ['No numeric columns to summarize.']})
+    stats = numeric.describe().T
+    stats.insert(0, 'missing', numeric.isna().sum())
+    return stats.round(4).reset_index(names='column')
+
+
 def plot_upload(df, x_col, y_col, chart_type):
     if df is None or not x_col or not y_col:
         return gr.ScatterPlot(value=None), gr.LinePlot(value=None, visible=False)
@@ -173,13 +184,15 @@ with gr.Blocks(title='Hello world') as gradio_app:
                     up_line = gr.LinePlot(height=400, visible=False)
                     preview = gr.Dataframe(label='Preview', max_height=250,
                                            interactive=False)
+                    with gr.Accordion('Summary statistics', open=False):
+                        summary = gr.Dataframe(interactive=False, max_height=250)
 
             upload.change(
                 load_upload, inputs=upload,
                 outputs=[upload_state, x_col, y_col, status],
             ).then(
-                lambda df: df.head(100) if df is not None else None,
-                inputs=upload_state, outputs=preview,
+                lambda df: (df.head(100) if df is not None else None, summarize(df)),
+                inputs=upload_state, outputs=[preview, summary],
             )
             gr.on(
                 triggers=[x_col.change, y_col.change, up_chart.change],
